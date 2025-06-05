@@ -1,103 +1,219 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import React, { useState, FormEvent } from 'react';
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { toast } from "sonner";
+import { SpotifyAlbum, SpotifyPlaylist, SpotifyTrack } from '@/lib/spotify';
+import { downloadSingleTrackLyrics, downloadMultipleTracksLyrics, getSettings, saveSettings } from '@/lib/lyrics-utils';
+import { motion } from 'motion/react';
+import HeroSection from '@/components/HeroSection';
+import SettingsCard from '@/components/SettingsCard';
+import SpotifyDataRenderer from '@/components/SpotifyDataRenderer';
+
+interface FetchedSpotifyData {
+  type: 'track' | 'album' | 'playlist';
+  data: SpotifyTrack | SpotifyAlbum | SpotifyPlaylist;
+}
+
+export default function HomePage() {
+  const [url, setUrl] = useState<string>("");
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [spotifyData, setSpotifyData] = useState<FetchedSpotifyData | null>(null);
+  const [downloadingTrack, setDownloadingTrack] = useState<string | null>(null);
+  const [downloadingZip, setDownloadingZip] = useState<boolean>(false);
+  const [zipProgress, setZipProgress] = useState<number>(0);
+  const [showSettings, setShowSettings] = useState<boolean>(false);
+  const [settings, setSettings] = useState(getSettings);
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!url.trim()) {
+      toast.error("Please enter a Spotify URL.");
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    setSpotifyData(null);
+    try {
+      const response = await fetch('/api/spotify-info', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ url }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to fetch Spotify data.');
+      }
+
+      setSpotifyData(result as FetchedSpotifyData);
+      toast.success("Spotify data fetched successfully!")
+    } catch (err: any) {
+      console.error("Submission error:", err);
+      const errorMessage = err.message || "An unknown error occurred.";
+      setError(errorMessage);
+      toast.error(errorMessage);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSingleDownload = async (track: SpotifyTrack) => {
+    setDownloadingTrack(track.id);
+    try {
+      const result = await downloadSingleTrackLyrics(track);
+      if (result.sync) {
+        toast.success(`Downloaded lyrics for "${track.name}"`);
+      } else {
+        toast.warning(`Downloaded unsynced lyrics for "${track.name}"`);
+      }
+    } catch (error: any) {
+      if (error.message && error.message.includes('No lyrics found')) {
+        toast.error(`No lyrics found for "${track.name}"`);
+      } else {
+        toast.error(error.message || 'Failed to download lyrics');
+      }
+    } finally {
+      setDownloadingTrack(null);
+    }
+  };
+
+  const handleZipDownload = async () => {
+    if (!spotifyData) return;
+
+    setDownloadingZip(true);
+    setZipProgress(0);
+
+    try {
+      let tracks: any[] = [];
+      let albumName = '';
+
+      if (spotifyData.type === 'album') {
+        const album = spotifyData.data as SpotifyAlbum;
+        tracks = album.tracks.items.filter(t => t && t.id);
+        albumName = album.name;
+      } else if (spotifyData.type === 'playlist') {
+        const playlist = spotifyData.data as SpotifyPlaylist;
+        tracks = playlist.tracks.items
+          .filter(item => item.track && item.track.id)
+          .map(item => item.track);
+        albumName = playlist.name;
+      }
+
+      if (tracks.length === 0) {
+        toast.error('No tracks found to download');
+        return;
+      }
+
+      const result = await downloadMultipleTracksLyrics(
+        tracks,
+        albumName,
+        (progress) => setZipProgress(progress)
+      );
+
+      if (result.successful === result.total) {
+        toast.success(`Downloaded lyrics for all ${result.total} tracks`);
+      } else if (result.successful > 0) {
+        toast.warning(`Downloaded ${result.successful} out of ${result.total} tracks (${result.total - result.successful} had no lyrics)`);
+      }
+    } catch (error: any) {
+      if (error.message && error.message.includes('No lyrics found for any tracks')) {
+        toast.error('No lyrics found for any tracks in this collection');
+      } else {
+        toast.error(error.message || 'Failed to download lyrics ZIP');
+      }
+    } finally {
+      setDownloadingZip(false);
+      setZipProgress(0);
+    }
+  };
+
+  const handleSettingsUpdate = () => {
+    saveSettings(settings);
+    setShowSettings(false);
+    toast.success('Settings saved successfully!');
+  };
+
   return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm/6 text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-[family-name:var(--font-geist-mono)] font-semibold">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+    <main className="min-h-screen bg-background">
+      <HeroSection
+        url={url}
+        setUrl={setUrl}
+        loading={loading}
+        showSettings={showSettings}
+        setShowSettings={setShowSettings}
+        onSubmit={handleSubmit}
+      />
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
+      {/* Results Section */}
+      {(error || spotifyData || showSettings) && (
+        <motion.section
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.5 }}
+          className="container mx-auto px-4 pb-16"
         >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
-    </div>
+          <div className="max-w-3xl mx-auto">
+            {error && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5 }}
+              >
+                <Card className="bg-destructive/10 border-destructive shadow-lg border">
+                  <CardHeader>
+                    <CardTitle className="text-destructive">Error</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-destructive-foreground">{error}</p>
+                  </CardContent>
+                </Card>
+              </motion.div>
+            )}
+
+            {showSettings && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5 }}
+              >
+                <SettingsCard
+                  settings={settings}
+                  setSettings={setSettings}
+                  onSave={handleSettingsUpdate}
+                  onCancel={() => setShowSettings(false)}
+                />
+              </motion.div>
+            )}
+
+            {spotifyData && (
+              <motion.div
+                initial={{ opacity: 0, y: 30 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.6, delay: 0.2 }}
+              >
+                <SpotifyDataRenderer
+                  spotifyData={spotifyData}
+                  downloadingTrack={downloadingTrack}
+                  downloadingZip={downloadingZip}
+                  zipProgress={zipProgress}
+                  onSingleDownload={handleSingleDownload}
+                  onZipDownload={handleZipDownload}
+                />
+              </motion.div>
+            )}
+          </div>
+        </motion.section>
+      )}
+    </main>
   );
 }
