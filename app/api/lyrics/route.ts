@@ -46,4 +46,4 @@ export async function GET(request: Request) {
         const errorMessage = error instanceof Error ? error.message : "Internal server error";
         return NextResponse.json({ error: "An unexpected error occurred while fetching lyrics.", details: errorMessage }, { status: 500 });
     }
-} 
+}
